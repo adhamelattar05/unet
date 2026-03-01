@@ -1,0 +1,128 @@
+import os
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras import layers, models
+
+def set_low_power():
+    # These environment variables should ideally be set before TF import,
+    # but keeping here as reminder; set them in your terminal for best effect.
+    tf.config.threading.set_intra_op_parallelism_threads(2)
+    tf.config.threading.set_inter_op_parallelism_threads(1)
+
+def conv_block(x, filters, activation):
+    x = layers.Conv2D(filters, 3, padding="same")(x)
+    x = layers.BatchNormalization()(x)
+    x = activation_layer(x, activation)
+    x = layers.Conv2D(filters, 3, padding="same")(x)
+    x = layers.BatchNormalization()(x)
+    x = activation_layer(x, activation)
+    return x
+
+def activation_layer(x, activation):
+    act = activation.lower()
+    if act == "relu":
+        return layers.ReLU()(x)
+    if act == "leakyrelu":
+        return layers.LeakyReLU(0.1)(x)
+    if act == "elu":
+        return layers.ELU()(x)
+    if act == "gelu":
+        return tf.keras.activations.gelu(x)
+    if act in ["silu", "swish"]:
+        return tf.keras.activations.swish(x)
+    if act == "mish":
+        # mish = x * tanh(softplus(x))
+        return x * tf.math.tanh(tf.math.softplus(x))
+    return layers.ReLU()(x)
+
+def build_unet(img_size=128, activation="relu"):
+    inputs = layers.Input((img_size, img_size, 1))
+
+    c1 = conv_block(inputs, 16, activation)
+    p1 = layers.MaxPool2D()(c1)
+
+    c2 = conv_block(p1, 32, activation)
+    p2 = layers.MaxPool2D()(c2)
+
+    c3 = conv_block(p2, 64, activation)
+    p3 = layers.MaxPool2D()(c3)
+
+    c4 = conv_block(p3, 128, activation)
+
+    u5 = layers.UpSampling2D()(c4)
+    u5 = layers.Concatenate()([u5, c3])
+    c5 = conv_block(u5, 64, activation)
+
+    u6 = layers.UpSampling2D()(c5)
+    u6 = layers.Concatenate()([u6, c2])
+    c6 = conv_block(u6, 32, activation)
+
+    u7 = layers.UpSampling2D()(c6)
+    u7 = layers.Concatenate()([u7, c1])
+    c7 = conv_block(u7, 16, activation)
+
+    outputs = layers.Conv2D(1, 1, activation="sigmoid")(c7)
+
+    return models.Model(inputs=inputs, outputs=outputs)
+
+def dice_coef(y_true, y_pred, eps=1e-6):
+    y_true = tf.cast(y_true, tf.float32)
+    y_pred = tf.cast(y_pred > 0.5, tf.float32)
+    inter = tf.reduce_sum(y_true * y_pred)
+    denom = tf.reduce_sum(y_true) + tf.reduce_sum(y_pred)
+    return (2.0 * inter + eps) / (denom + eps)
+
+def load_split(split_dir):
+    img_dir = os.path.join(split_dir, "images")
+    msk_dir = os.path.join(split_dir, "masks")
+    img_files = sorted([f for f in os.listdir(img_dir) if f.endswith(".npy")])
+    X = np.stack([np.load(os.path.join(img_dir, f)) for f in img_files], axis=0).astype(np.float32)
+    Y = np.stack([np.load(os.path.join(msk_dir, f)) for f in img_files], axis=0).astype(np.float32)
+    return X, Y
+
+def main(data_dir="brats2d", img_size=128, activation="relu", epochs=5, batch_size=1):
+    set_low_power()
+
+    Xtr, Ytr = load_split(os.path.join(data_dir, "train"))
+    Xva, Yva = load_split(os.path.join(data_dir, "val"))
+
+    print("Loaded:", Xtr.shape, Ytr.shape, Xva.shape, Yva.shape)
+
+    model = build_unet(img_size=img_size, activation=activation)
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
+        loss="binary_crossentropy",
+        metrics=[dice_coef],
+    )
+
+    ckpt = tf.keras.callbacks.ModelCheckpoint(
+        filepath=f"unet_brats2020_{activation}_{img_size}.keras",
+        monitor="val_dice_coef",
+        mode="max",
+        save_best_only=True,
+        verbose=1,
+    )
+
+    es = tf.keras.callbacks.EarlyStopping(
+        monitor="val_dice_coef", mode="max", patience=5, restore_best_weights=True
+    )
+
+    model.fit(
+        Xtr, Ytr,
+        validation_data=(Xva, Yva),
+        epochs=epochs,
+        batch_size=batch_size,
+        callbacks=[ckpt, es],
+        verbose=1,
+    )
+
+if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--data_dir", default="brats2d")
+    ap.add_argument("--img_size", type=int, default=128)
+    ap.add_argument("--activation", default="relu")
+    ap.add_argument("--epochs", type=int, default=5)
+    ap.add_argument("--batch_size", type=int, default=1)
+    args = ap.parse_args()
+    main(**vars(args))
