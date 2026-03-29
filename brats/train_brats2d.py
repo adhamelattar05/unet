@@ -95,9 +95,10 @@ def main(data_dir="brats2d", img_size=128, activation="relu", epochs=5, batch_si
         metrics=[dice_coef],
     )
 
+    os.makedirs("/content/drive/MyDrive/Bachelor/Models/unet_edema", exist_ok=True)
+
     ckpt = tf.keras.callbacks.ModelCheckpoint(
-        filepath=f"unet_brats2020_{activation}_{img_size}.keras",
-        monitor="val_dice_coef",
+        filepath=f"/content/drive/MyDrive/Bachelor/Models/unet_edema/unet_edema_{activation}_{img_size}.keras"        monitor="val_dice_coef",
         mode="max",
         save_best_only=True,
         verbose=1,
