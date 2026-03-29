@@ -1,6 +1,8 @@
 import os
 import json
 import time
+from datetime import datetime
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -10,9 +12,11 @@ from tensorflow.keras import layers, models
 MODEL_BASE = "/content/drive/MyDrive/Bachelor/Models/unet_edema"
 RESULTS_BASE = "/content/drive/MyDrive/Bachelor/Results/unet_edema"
 
+
 def set_low_power():
     tf.config.threading.set_intra_op_parallelism_threads(2)
     tf.config.threading.set_inter_op_parallelism_threads(1)
+
 
 def ensure_dirs():
     os.makedirs(MODEL_BASE, exist_ok=True)
@@ -22,6 +26,7 @@ def ensure_dirs():
     os.makedirs(f"{RESULTS_BASE}/configs", exist_ok=True)
     os.makedirs(f"{RESULTS_BASE}/predictions", exist_ok=True)
 
+
 def conv_block(x, filters, activation):
     x = layers.Conv2D(filters, 3, padding="same")(x)
     x = layers.BatchNormalization()(x)
@@ -30,6 +35,7 @@ def conv_block(x, filters, activation):
     x = layers.BatchNormalization()(x)
     x = activation_layer(x, activation)
     return x
+
 
 def activation_layer(x, activation):
     act = activation.lower()
@@ -46,6 +52,7 @@ def activation_layer(x, activation):
     if act == "mish":
         return x * tf.math.tanh(tf.math.softplus(x))
     return layers.ReLU()(x)
+
 
 def build_unet(img_size=128, activation="relu"):
     inputs = layers.Input((img_size, img_size, 1))
@@ -76,6 +83,7 @@ def build_unet(img_size=128, activation="relu"):
     outputs = layers.Conv2D(1, 1, activation="sigmoid")(c7)
     return models.Model(inputs=inputs, outputs=outputs)
 
+
 def dice_coef(y_true, y_pred, eps=1e-6):
     y_true = tf.cast(y_true, tf.float32)
     y_pred = tf.cast(y_pred > 0.5, tf.float32)
@@ -83,20 +91,43 @@ def dice_coef(y_true, y_pred, eps=1e-6):
     denom = tf.reduce_sum(y_true) + tf.reduce_sum(y_pred)
     return (2.0 * inter + eps) / (denom + eps)
 
+
 def load_split(split_dir):
     img_dir = os.path.join(split_dir, "images")
     msk_dir = os.path.join(split_dir, "masks")
+
     img_files = sorted([f for f in os.listdir(img_dir) if f.endswith(".npy")])
-    X = np.stack([np.load(os.path.join(img_dir, f)) for f in img_files], axis=0).astype(np.float32)
-    Y = np.stack([np.load(os.path.join(msk_dir, f)) for f in img_files], axis=0).astype(np.float32)
+    X = np.stack(
+        [np.load(os.path.join(img_dir, f)) for f in img_files],
+        axis=0
+    ).astype(np.float32)
+    Y = np.stack(
+        [np.load(os.path.join(msk_dir, f)) for f in img_files],
+        axis=0
+    ).astype(np.float32)
+
     return X, Y
 
-def save_history(history, activation, img_size):
+
+def save_history(history, activation, img_size, timestamp):
     hist_df = pd.DataFrame(history.history)
-    hist_path = f"{RESULTS_BASE}/histories/history_{activation}_{img_size}.csv"
+    hist_path = (
+        f"{RESULTS_BASE}/histories/"
+        f"history_unet_edema_{activation}_{img_size}_{timestamp}.csv"
+    )
     hist_df.to_csv(hist_path, index=False)
 
-def save_plots(history, activation, img_size):
+
+def save_plots(history, activation, img_size, timestamp):
+    loss_plot_path = (
+        f"{RESULTS_BASE}/plots/"
+        f"loss_unet_edema_{activation}_{img_size}_{timestamp}.png"
+    )
+    dice_plot_path = (
+        f"{RESULTS_BASE}/plots/"
+        f"dice_unet_edema_{activation}_{img_size}_{timestamp}.png"
+    )
+
     plt.figure()
     plt.plot(history.history["loss"], label="train_loss")
     plt.plot(history.history["val_loss"], label="val_loss")
@@ -105,7 +136,7 @@ def save_plots(history, activation, img_size):
     plt.title(f"Loss - {activation}")
     plt.legend()
     plt.tight_layout()
-    plt.savefig(f"{RESULTS_BASE}/plots/loss_{activation}_{img_size}.png")
+    plt.savefig(loss_plot_path)
     plt.close()
 
     plt.figure()
@@ -116,13 +147,21 @@ def save_plots(history, activation, img_size):
     plt.title(f"Dice - {activation}")
     plt.legend()
     plt.tight_layout()
-    plt.savefig(f"{RESULTS_BASE}/plots/dice_{activation}_{img_size}.png")
+    plt.savefig(dice_plot_path)
     plt.close()
 
-def save_summary(history, activation, img_size, epochs, batch_size, elapsed_sec):
-    summary_path = f"{RESULTS_BASE}/metrics/summary.csv"
+
+def save_summary(history, activation, img_size, epochs, batch_size, elapsed_sec, timestamp):
+    cumulative_summary_path = (
+        f"{RESULTS_BASE}/metrics/summary_unet_edema_experiments.csv"
+    )
+    run_summary_path = (
+        f"{RESULTS_BASE}/metrics/"
+        f"summary_unet_edema_{activation}_{img_size}_{timestamp}.csv"
+    )
 
     row = {
+        "timestamp": timestamp,
         "activation": activation,
         "img_size": img_size,
         "epochs_requested": epochs,
@@ -137,16 +176,20 @@ def save_summary(history, activation, img_size, epochs, batch_size, elapsed_sec)
         "training_time_sec": float(elapsed_sec),
     }
 
-    if os.path.exists(summary_path):
-        df = pd.read_csv(summary_path)
+    pd.DataFrame([row]).to_csv(run_summary_path, index=False)
+
+    if os.path.exists(cumulative_summary_path):
+        df = pd.read_csv(cumulative_summary_path)
         df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
     else:
         df = pd.DataFrame([row])
 
-    df.to_csv(summary_path, index=False)
+    df.to_csv(cumulative_summary_path, index=False)
 
-def save_config(data_dir, img_size, activation, epochs, batch_size):
+
+def save_config(data_dir, img_size, activation, epochs, batch_size, timestamp):
     config = {
+        "timestamp": timestamp,
         "data_dir": data_dir,
         "img_size": img_size,
         "activation": activation,
@@ -155,12 +198,20 @@ def save_config(data_dir, img_size, activation, epochs, batch_size):
         "model_dir": MODEL_BASE,
         "results_dir": RESULTS_BASE,
     }
-    with open(f"{RESULTS_BASE}/configs/config_{activation}_{img_size}.json", "w") as f:
+
+    config_path = (
+        f"{RESULTS_BASE}/configs/"
+        f"config_unet_edema_{activation}_{img_size}_{timestamp}.json"
+    )
+    with open(config_path, "w") as f:
         json.dump(config, f, indent=2)
+
 
 def main(data_dir="brats2d", img_size=128, activation="relu", epochs=5, batch_size=1):
     set_low_power()
     ensure_dirs()
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     Xtr, Ytr = load_split(os.path.join(data_dir, "train"))
     Xva, Yva = load_split(os.path.join(data_dir, "val"))
@@ -175,7 +226,10 @@ def main(data_dir="brats2d", img_size=128, activation="relu", epochs=5, batch_si
     )
 
     ckpt = tf.keras.callbacks.ModelCheckpoint(
-        filepath=f"{MODEL_BASE}/unet_edema_{activation}_{img_size}.keras",
+        filepath=(
+            f"{MODEL_BASE}/"
+            f"unet_edema_{activation}_{img_size}_{timestamp}.keras"
+        ),
         monitor="val_dice_coef",
         mode="max",
         save_best_only=True,
@@ -202,15 +256,26 @@ def main(data_dir="brats2d", img_size=128, activation="relu", epochs=5, batch_si
 
     elapsed_sec = time.time() - start_time
 
-    save_history(history, activation, img_size)
-    save_plots(history, activation, img_size)
-    save_summary(history, activation, img_size, epochs, batch_size, elapsed_sec)
-    save_config(data_dir, img_size, activation, epochs, batch_size)
+    save_history(history, activation, img_size, timestamp)
+    save_plots(history, activation, img_size, timestamp)
+    save_summary(
+        history,
+        activation,
+        img_size,
+        epochs,
+        batch_size,
+        elapsed_sec,
+        timestamp,
+    )
+    save_config(data_dir, img_size, activation, epochs, batch_size, timestamp)
 
-    print(f"Saved history, plots, summary, and config for {activation}.")
+    print(f"Saved model, history, plots, summaries, and config for {activation}.")
+    print(f"Run timestamp: {timestamp}")
+
 
 if __name__ == "__main__":
     import argparse
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--data_dir", default="brats2d")
     ap.add_argument("--img_size", type=int, default=128)
@@ -218,4 +283,5 @@ if __name__ == "__main__":
     ap.add_argument("--epochs", type=int, default=5)
     ap.add_argument("--batch_size", type=int, default=1)
     args = ap.parse_args()
+
     main(**vars(args))
