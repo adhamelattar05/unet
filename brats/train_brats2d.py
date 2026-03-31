@@ -47,8 +47,7 @@ def activation_layer(x, activation):
 
     if act == "mish":
         return layers.Lambda(
-            lambda t: t * tf.math.tanh(tf.math.softplus(t)),
-            name="mish_activation"
+            lambda t: t * tf.math.tanh(tf.math.softplus(t))
         )(x)
 
     return layers.ReLU()(x)
