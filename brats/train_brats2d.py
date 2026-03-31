@@ -27,31 +27,43 @@ def ensure_dirs():
     os.makedirs(f"{RESULTS_BASE}/predictions", exist_ok=True)
 
 
+def activation_layer(x, activation):
+    act = activation.lower()
+
+    if act == "relu":
+        return layers.ReLU()(x)
+
+    if act == "leakyrelu":
+        return layers.LeakyReLU(negative_slope=0.1)(x)
+
+    if act == "elu":
+        return layers.ELU()(x)
+
+    if act == "gelu":
+        return layers.Activation("gelu")(x)
+
+    if act in ["silu", "swish"]:
+        return layers.Activation("swish")(x)
+
+    if act == "mish":
+        return layers.Lambda(
+            lambda t: t * tf.math.tanh(tf.math.softplus(t)),
+            name="mish_activation"
+        )(x)
+
+    return layers.ReLU()(x)
+
+
 def conv_block(x, filters, activation):
     x = layers.Conv2D(filters, 3, padding="same")(x)
     x = layers.BatchNormalization()(x)
     x = activation_layer(x, activation)
+
     x = layers.Conv2D(filters, 3, padding="same")(x)
     x = layers.BatchNormalization()(x)
     x = activation_layer(x, activation)
+
     return x
-
-
-def activation_layer(x, activation):
-    act = activation.lower()
-    if act == "relu":
-        return layers.ReLU()(x)
-    if act == "leakyrelu":
-        return layers.LeakyReLU(0.1)(x)
-    if act == "elu":
-        return layers.ELU()(x)
-    if act == "gelu":
-        return tf.keras.activations.gelu(x)
-    if act in ["silu", "swish"]:
-        return tf.keras.activations.swish(x)
-    if act == "mish":
-        return x * tf.math.tanh(tf.math.softplus(x))
-    return layers.ReLU()(x)
 
 
 def build_unet(img_size=128, activation="relu"):
@@ -87,8 +99,10 @@ def build_unet(img_size=128, activation="relu"):
 def dice_coef(y_true, y_pred, eps=1e-6):
     y_true = tf.cast(y_true, tf.float32)
     y_pred = tf.cast(y_pred > 0.5, tf.float32)
+
     inter = tf.reduce_sum(y_true * y_pred)
     denom = tf.reduce_sum(y_true) + tf.reduce_sum(y_pred)
+
     return (2.0 * inter + eps) / (denom + eps)
 
 
@@ -97,10 +111,12 @@ def load_split(split_dir):
     msk_dir = os.path.join(split_dir, "masks")
 
     img_files = sorted([f for f in os.listdir(img_dir) if f.endswith(".npy")])
+
     X = np.stack(
         [np.load(os.path.join(img_dir, f)) for f in img_files],
         axis=0
     ).astype(np.float32)
+
     Y = np.stack(
         [np.load(os.path.join(msk_dir, f)) for f in img_files],
         axis=0
@@ -203,6 +219,7 @@ def save_config(data_dir, img_size, activation, epochs, batch_size, timestamp):
         f"{RESULTS_BASE}/configs/"
         f"config_unet_edema_{activation}_{img_size}_{timestamp}.json"
     )
+
     with open(config_path, "w") as f:
         json.dump(config, f, indent=2)
 
@@ -226,10 +243,7 @@ def main(data_dir="brats2d", img_size=128, activation="relu", epochs=5, batch_si
     )
 
     ckpt = tf.keras.callbacks.ModelCheckpoint(
-        filepath=(
-            f"{MODEL_BASE}/"
-            f"unet_edema_{activation}_{img_size}_{timestamp}.keras"
-        ),
+        filepath=f"{MODEL_BASE}/unet_edema_{activation}_{img_size}_{timestamp}.keras",
         monitor="val_dice_coef",
         mode="max",
         save_best_only=True,
