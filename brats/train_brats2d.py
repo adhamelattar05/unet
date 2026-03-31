@@ -22,7 +22,8 @@ def ensure_dirs():
     os.makedirs(MODEL_BASE, exist_ok=True)
     os.makedirs(f"{RESULTS_BASE}/histories", exist_ok=True)
     os.makedirs(f"{RESULTS_BASE}/metrics", exist_ok=True)
-    os.makedirs(f"{RESULTS_BASE}/plots", exist_ok=True)
+    os.makedirs(f"{RESULTS_BASE}/plots/dice", exist_ok=True)
+    os.makedirs(f"{RESULTS_BASE}/plots/loss", exist_ok=True)
     os.makedirs(f"{RESULTS_BASE}/configs", exist_ok=True)
     os.makedirs(f"{RESULTS_BASE}/predictions", exist_ok=True)
 
@@ -135,11 +136,11 @@ def save_history(history, activation, img_size, timestamp):
 
 def save_plots(history, activation, img_size, timestamp):
     loss_plot_path = (
-        f"{RESULTS_BASE}/plots/"
+        f"{RESULTS_BASE}/plots/loss/"
         f"loss_unet_edema_{activation}_{img_size}_{timestamp}.png"
     )
     dice_plot_path = (
-        f"{RESULTS_BASE}/plots/"
+        f"{RESULTS_BASE}/plots/dice/"
         f"dice_unet_edema_{activation}_{img_size}_{timestamp}.png"
     )
 
@@ -165,6 +166,7 @@ def save_plots(history, activation, img_size, timestamp):
     plt.savefig(dice_plot_path)
     plt.close()
 
+    
 
 def save_summary(history, activation, img_size, epochs, batch_size, elapsed_sec, timestamp):
     cumulative_summary_path = (
