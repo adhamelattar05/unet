@@ -166,11 +166,13 @@ def save_plots(history, activation, img_size, timestamp):
     plt.savefig(dice_plot_path)
     plt.close()
 
-    
 
 def save_summary(history, activation, img_size, epochs, batch_size, elapsed_sec, timestamp):
     cumulative_summary_path = (
         f"{RESULTS_BASE}/metrics/summary_unet_edema_experiments.csv"
+    )
+    latest_summary_path = (
+        f"{RESULTS_BASE}/metrics/summary_unet_edema_latest.csv"
     )
     run_summary_path = (
         f"{RESULTS_BASE}/metrics/"
@@ -193,17 +195,42 @@ def save_summary(history, activation, img_size, epochs, batch_size, elapsed_sec,
         "training_time_sec": float(elapsed_sec),
     }
 
+    # Save standalone summary for this specific run
     pd.DataFrame([row]).to_csv(run_summary_path, index=False)
 
+    # Update cumulative summary (keeps all runs)
     if os.path.exists(cumulative_summary_path):
-        df = pd.read_csv(cumulative_summary_path)
-        df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+        df_all = pd.read_csv(cumulative_summary_path)
+        df_all = pd.concat([df_all, pd.DataFrame([row])], ignore_index=True)
     else:
-        df = pd.DataFrame([row])
+        df_all = pd.DataFrame([row])
 
-    df.to_csv(cumulative_summary_path, index=False)
+    df_all.to_csv(cumulative_summary_path, index=False)
 
+    # Update latest summary (keeps only newest run per activation + img_size)
+    if os.path.exists(latest_summary_path):
+        df_latest = pd.read_csv(latest_summary_path)
 
+        # remove older row(s) for same activation and image size
+        df_latest = df_latest[
+            ~(
+                (df_latest["activation"] == activation) &
+                (df_latest["img_size"] == img_size)
+            )
+        ]
+
+        df_latest = pd.concat([df_latest, pd.DataFrame([row])], ignore_index=True)
+    else:
+        df_latest = pd.DataFrame([row])
+
+    # sort latest summary for readability
+    df_latest = df_latest.sort_values(
+        by=["activation", "img_size", "timestamp"]
+    ).reset_index(drop=True)
+
+    df_latest.to_csv(latest_summary_path, index=False)
+
+    
 def save_config(data_dir, img_size, activation, epochs, batch_size, timestamp):
     config = {
         "timestamp": timestamp,
