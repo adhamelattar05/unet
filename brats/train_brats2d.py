@@ -26,7 +26,6 @@ def ensure_dirs():
     os.makedirs(f"{RESULTS_BASE}/plots/loss", exist_ok=True)
     os.makedirs(f"{RESULTS_BASE}/configs", exist_ok=True)
     os.makedirs(f"{RESULTS_BASE}/predictions", exist_ok=True)
-    os.makedirs(f"{RESULTS_BASE}/mask_reports", exist_ok=True)
 
 
 def activation_layer(x, activation):
@@ -107,10 +106,6 @@ def dice_coef(y_true, y_pred, eps=1e-6):
     return (2.0 * inter + eps) / (denom + eps)
 
 
-def get_unique_values(arr):
-    return sorted(np.unique(arr).tolist())
-
-
 def clean_mask_to_edema(mask, edema_labels=1):
     """
     Convert mask to binary edema-only mask.
@@ -159,7 +154,7 @@ def validate_image_mask_alignment(img_files, msk_dir):
         )
 
 
-def load_split(split_dir, edema_labels=1, save_report=True):
+def load_split(split_dir, edema_labels=1):
     img_dir = os.path.join(split_dir, "images")
     msk_dir = os.path.join(split_dir, "masks")
 
@@ -177,7 +172,6 @@ def load_split(split_dir, edema_labels=1, save_report=True):
     X_list = []
     Y_list = []
 
-    per_file_report = []
     global_raw_values = set()
     global_clean_values = set()
 
@@ -210,15 +204,6 @@ def load_split(split_dir, edema_labels=1, save_report=True):
         X_list.append(img)
         Y_list.append(cleaned_mask)
 
-        per_file_report.append({
-            "file": f,
-            "raw_unique_labels": ",".join(map(str, sorted(raw_unique.tolist()))),
-            "clean_unique_labels": ",".join(map(str, sorted(clean_unique.tolist()))),
-            "positive_edema_pixels": positive_pixels,
-            "total_pixels": total_pixels,
-            "edema_ratio": positive_pixels / max(total_pixels, 1),
-        })
-
     X = np.stack(X_list, axis=0).astype(np.float32)
     Y = np.stack(Y_list, axis=0).astype(np.float32)
 
@@ -235,12 +220,6 @@ def load_split(split_dir, edema_labels=1, save_report=True):
     print(f"[{split_name.upper()}] Clean mask labels kept: {sorted(global_clean_values)}")
     print(f"[{split_name.upper()}] Empty edema masks: {empty_mask_count}/{len(img_files)}")
     print(f"[{split_name.upper()}] Overall edema pixel ratio: {overall_ratio:.6f}")
-
-    if save_report:
-        report_df = pd.DataFrame(per_file_report)
-        report_path = f"{RESULTS_BASE}/mask_reports/mask_report_{split_name}.csv"
-        report_df.to_csv(report_path, index=False)
-        print(f"[{split_name.upper()}] Saved mask report to: {report_path}")
 
     return X, Y
 
@@ -423,12 +402,10 @@ def main(
     Xtr, Ytr = load_split(
         os.path.join(data_dir, "train"),
         edema_labels=edema_labels,
-        save_report=True
     )
     Xva, Yva = load_split(
         os.path.join(data_dir, "val"),
         edema_labels=edema_labels,
-        save_report=True
     )
 
     print("\nLoaded:")
@@ -492,7 +469,7 @@ def main(
         edema_labels=edema_labels,
     )
 
-    print(f"\nSaved model, history, plots, summaries, config, and mask reports for {activation}.")
+    print(f"\nSaved model, history, plots, summaries, and config for {activation}.")
     print(f"Run timestamp: {timestamp}")
 
 
