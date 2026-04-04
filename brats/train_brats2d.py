@@ -9,7 +9,6 @@ import matplotlib.pyplot as plt
 import tensorflow as tf
 from tensorflow.keras import layers, models
 from scipy.spatial.distance import directed_hausdorff
-from scipy.ndimage import distance_transform_edt
 
 MODEL_BASE = "/content/drive/MyDrive/Bachelor/Models/unet_edema"
 RESULTS_BASE = "/content/drive/MyDrive/Bachelor/Results/unet_edema"
@@ -152,59 +151,57 @@ def iou_metric(y_true, y_pred, eps=1e-6):
     return (inter + eps) / (union + eps)
 
 
-def _signed_distance_map_single(mask_2d):
-    mask_2d = (mask_2d > 0.5).astype(np.uint8)
+# ---------------------------
+# Pure TensorFlow Hausdorff-style surrogate
+# ---------------------------
 
-    if mask_2d.max() == 0:
-        return np.ones_like(mask_2d, dtype=np.float32)
-
-    if mask_2d.min() == 1:
-        return np.ones_like(mask_2d, dtype=np.float32)
-
-    fg_dist = distance_transform_edt(mask_2d)
-    bg_dist = distance_transform_edt(1 - mask_2d)
-
-    # Distance to boundary from both sides
-    sdm = fg_dist + bg_dist
-    return sdm.astype(np.float32)
+def soft_erode(x):
+    p1 = -tf.nn.max_pool2d(-x, ksize=3, strides=1, padding="SAME")
+    p2 = -tf.nn.max_pool2d(-x, ksize=[1, 3], strides=1, padding="SAME")
+    p3 = -tf.nn.max_pool2d(-x, ksize=[3, 1], strides=1, padding="SAME")
+    return tf.minimum(tf.minimum(p1, p2), p3)
 
 
-def _batch_distance_maps(y_true_np):
-    y_true_np = np.asarray(y_true_np).astype(np.float32)
-    batch = []
-
-    for i in range(y_true_np.shape[0]):
-        mask = np.squeeze(y_true_np[i])
-        sdm = _signed_distance_map_single(mask)
-        batch.append(np.expand_dims(sdm, axis=-1))
-
-    return np.stack(batch, axis=0).astype(np.float32)
+def soft_dilate(x):
+    return tf.nn.max_pool2d(x, ksize=3, strides=1, padding="SAME")
 
 
-def hausdorff_loss(y_true, y_pred):
+def soft_open(x):
+    return soft_dilate(soft_erode(x))
+
+
+def soft_boundary(x):
+    x = tf.clip_by_value(x, 0.0, 1.0)
+    opened = soft_open(x)
+    return tf.nn.relu(x - opened)
+
+
+def hausdorff_eroded_loss(y_true, y_pred, iterations=10, alpha=2.0):
     """
-    Differentiable Hausdorff-style surrogate.
-    This is not exact Hausdorff distance.
-    It weights squared prediction errors by distance to the GT boundary.
+    Pure TensorFlow Hausdorff-style surrogate based on iterative soft erosions.
+    This is differentiable and GPU-trainable.
+    It is not the exact mathematical Hausdorff distance.
     """
     y_true = tf.cast(y_true, tf.float32)
     y_pred = tf.cast(y_pred, tf.float32)
 
-    dist_map = tf.numpy_function(
-        func=_batch_distance_maps,
-        inp=[y_true],
-        Tout=tf.float32,
-    )
-    dist_map.set_shape(y_true.shape)
+    gt_b = soft_boundary(y_true)
+    pr_b = soft_boundary(y_pred)
 
-    sq_error = tf.square(y_true - y_pred)
-    weighted_error = sq_error * tf.square(dist_map)
+    err = tf.square(gt_b - pr_b)
+    total = tf.reduce_mean(err)
 
-    return tf.reduce_mean(weighted_error)
+    current = err
+    for k in range(iterations):
+        current = soft_erode(current)
+        weight = tf.pow(tf.cast(k + 1, tf.float32), alpha)
+        total += weight * tf.reduce_mean(current)
+
+    return total
 
 
 def hausdorff_dice_loss(y_true, y_pred, hausdorff_weight=1.0, dice_weight=1.0):
-    hd = hausdorff_loss(y_true, y_pred)
+    hd = hausdorff_eroded_loss(y_true, y_pred, iterations=10, alpha=2.0)
     dl = dice_loss(y_true, y_pred)
     return hausdorff_weight * hd + dice_weight * dl
 
