@@ -283,11 +283,6 @@ def np_iou(y_true, y_pred, eps=1e-6):
 
 
 def np_hausdorff(y_true, y_pred):
-    """
-    Symmetric Hausdorff distance on foreground pixel coordinates.
-    Uses image diagonal when one mask is empty and the other is not.
-    Returns 0 when both masks are empty.
-    """
     y_true_pts = np.argwhere(y_true > 0)
     y_pred_pts = np.argwhere(y_pred > 0)
 
@@ -343,6 +338,115 @@ def evaluate_predictions(y_true, y_prob, threshold=0.5):
     }
 
     return summary
+
+
+def normalize_for_display(img):
+    img = np.squeeze(img).astype(np.float32)
+    img_min = float(np.min(img))
+    img_max = float(np.max(img))
+    if img_max - img_min < 1e-8:
+        return np.zeros_like(img, dtype=np.float32)
+    return (img - img_min) / (img_max - img_min)
+
+
+def make_overlay(base_img, mask, alpha=0.45):
+    base = normalize_for_display(base_img)
+    mask = np.squeeze(mask).astype(np.float32)
+    mask = (mask > 0.5).astype(np.float32)
+
+    overlay = np.stack([base, base, base], axis=-1)
+    overlay[..., 0] = np.clip(overlay[..., 0] + alpha * mask, 0, 1)
+    overlay[..., 1] = np.clip(overlay[..., 1] * (1 - 0.35 * mask), 0, 1)
+    overlay[..., 2] = np.clip(overlay[..., 2] * (1 - 0.35 * mask), 0, 1)
+    return overlay
+
+
+def make_error_map(gt_mask, pred_mask):
+    gt = (np.squeeze(gt_mask) > 0.5).astype(np.uint8)
+    pr = (np.squeeze(pred_mask) > 0.5).astype(np.uint8)
+
+    fp = ((pr == 1) & (gt == 0)).astype(np.float32)
+    fn = ((pr == 0) & (gt == 1)).astype(np.float32)
+    tp = ((pr == 1) & (gt == 1)).astype(np.float32)
+
+    err = np.zeros((gt.shape[0], gt.shape[1], 3), dtype=np.float32)
+
+    # True positive -> green
+    err[..., 1] += tp
+    # False positive -> red
+    err[..., 0] += fp
+    # False negative -> blue
+    err[..., 2] += fn
+
+    return np.clip(err, 0, 1)
+
+
+def save_prediction_visualizations(
+    Xva,
+    Yva,
+    y_val_prob,
+    activation,
+    img_size,
+    timestamp,
+    threshold=0.5,
+    max_samples=12,
+):
+    vis_dir = (
+        f"{RESULTS_BASE}/predictions/"
+        f"predictions_unet_edema_{activation}_{img_size}_{timestamp}"
+    )
+    os.makedirs(vis_dir, exist_ok=True)
+
+    y_val_bin = np_binarize(y_val_prob, threshold=threshold)
+
+    n_samples = min(len(Xva), max_samples)
+    print(f"\nSaving {n_samples} validation prediction visualizations to: {vis_dir}")
+
+    for i in range(n_samples):
+        img = np.squeeze(Xva[i])
+        gt = np.squeeze(Yva[i])
+        prob = np.squeeze(y_val_prob[i])
+        pred = np.squeeze(y_val_bin[i])
+
+        gt_overlay = make_overlay(img, gt)
+        pred_overlay = make_overlay(img, pred)
+        err_map = make_error_map(gt, pred)
+
+        fig, axes = plt.subplots(2, 4, figsize=(16, 8))
+
+        axes[0, 0].imshow(normalize_for_display(img), cmap="gray")
+        axes[0, 0].set_title("MRI")
+
+        axes[0, 1].imshow(gt, cmap="gray", vmin=0, vmax=1)
+        axes[0, 1].set_title("Ground Truth Edema")
+
+        axes[0, 2].imshow(prob, cmap="viridis", vmin=0, vmax=1)
+        axes[0, 2].set_title("Predicted Probability")
+
+        axes[0, 3].imshow(pred, cmap="gray", vmin=0, vmax=1)
+        axes[0, 3].set_title("Predicted Binary Mask")
+
+        axes[1, 0].imshow(gt_overlay)
+        axes[1, 0].set_title("GT Overlay")
+
+        axes[1, 1].imshow(pred_overlay)
+        axes[1, 1].set_title("Prediction Overlay")
+
+        axes[1, 2].imshow(err_map)
+        axes[1, 2].set_title("Error Map (R=FP, G=TP, B=FN)")
+
+        axes[1, 3].imshow(normalize_for_display(img), cmap="gray")
+        axes[1, 3].contour(gt, levels=[0.5], colors="lime", linewidths=1)
+        axes[1, 3].contour(pred, levels=[0.5], colors="red", linewidths=1)
+        axes[1, 3].set_title("Contours (GT=lime, Pred=red)")
+
+        for ax in axes.ravel():
+            ax.axis("off")
+
+        plt.tight_layout()
+        out_path = os.path.join(vis_dir, f"val_prediction_{i:03d}.png")
+        plt.savefig(out_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
 
 
 def save_history(history, activation, img_size, timestamp):
@@ -583,7 +687,7 @@ def main(
 
     elapsed_sec = time.time() - start_time
 
-    print("\nRunning validation prediction for saved metrics...")
+    print("\nRunning validation prediction for saved metrics and visualizations...")
     y_val_prob = model.predict(Xva, batch_size=batch_size, verbose=1)
 
     eval_summary = evaluate_predictions(
@@ -595,6 +699,17 @@ def main(
     print("\nValidation evaluation summary:")
     for k, v in eval_summary.items():
         print(f"{k}: {v:.6f}")
+
+    save_prediction_visualizations(
+        Xva=Xva,
+        Yva=Yva,
+        y_val_prob=y_val_prob,
+        activation=activation,
+        img_size=img_size,
+        timestamp=timestamp,
+        threshold=0.5,
+        max_samples=12,
+    )
 
     save_history(history, activation, img_size, timestamp)
     save_plots(history, activation, img_size, timestamp)
@@ -619,7 +734,7 @@ def main(
         edema_labels=edema_labels,
     )
 
-    print(f"\nSaved model, history, plots, summaries, and config for {activation}.")
+    print(f"\nSaved model, history, plots, summaries, config, and prediction visualizations for {activation}.")
     print(f"Run timestamp: {timestamp}")
 
 
