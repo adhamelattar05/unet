@@ -342,7 +342,7 @@ def evaluate_predictions(y_true, y_prob, threshold=0.5):
         "hausdorff_max": float(df["hausdorff"].max()),
     }
 
-    return df, summary
+    return summary
 
 
 def save_history(history, activation, img_size, timestamp):
@@ -385,27 +385,6 @@ def save_plots(history, activation, img_size, timestamp):
     plt.tight_layout()
     plt.savefig(dice_plot_path)
     plt.close()
-
-
-def save_evaluation_metrics(
-    val_sample_df,
-    eval_summary,
-    activation,
-    img_size,
-    timestamp,
-):
-    sample_metrics_path = (
-        f"{RESULTS_BASE}/metrics/"
-        f"val_metrics_unet_edema_{activation}_{img_size}_{timestamp}.csv"
-    )
-
-    run_eval_path = (
-        f"{RESULTS_BASE}/metrics/"
-        f"eval_summary_unet_edema_{activation}_{img_size}_{timestamp}.csv"
-    )
-
-    val_sample_df.to_csv(sample_metrics_path, index=False)
-    pd.DataFrame([eval_summary]).to_csv(run_eval_path, index=False)
 
 
 def save_summary(
@@ -456,10 +435,15 @@ def save_summary(
         "final_train_iou": float(history.history["iou_metric"][-1]),
         "final_val_iou": float(history.history["val_iou_metric"][-1]),
         "eval_val_dice_mean": eval_summary["dice_mean"],
+        "eval_val_dice_std": eval_summary["dice_std"],
         "eval_val_precision_mean": eval_summary["precision_mean"],
+        "eval_val_precision_std": eval_summary["precision_std"],
         "eval_val_specificity_mean": eval_summary["specificity_mean"],
+        "eval_val_specificity_std": eval_summary["specificity_std"],
         "eval_val_iou_mean": eval_summary["iou_mean"],
+        "eval_val_iou_std": eval_summary["iou_std"],
         "eval_val_hausdorff_mean": eval_summary["hausdorff_mean"],
+        "eval_val_hausdorff_std": eval_summary["hausdorff_std"],
         "eval_val_hausdorff_max": eval_summary["hausdorff_max"],
         "training_time_sec": float(elapsed_sec),
     }
@@ -602,7 +586,7 @@ def main(
     print("\nRunning validation prediction for saved metrics...")
     y_val_prob = model.predict(Xva, batch_size=batch_size, verbose=1)
 
-    val_sample_df, eval_summary = evaluate_predictions(
+    eval_summary = evaluate_predictions(
         y_true=Yva,
         y_prob=y_val_prob,
         threshold=0.5,
@@ -614,13 +598,6 @@ def main(
 
     save_history(history, activation, img_size, timestamp)
     save_plots(history, activation, img_size, timestamp)
-    save_evaluation_metrics(
-        val_sample_df=val_sample_df,
-        eval_summary=eval_summary,
-        activation=activation,
-        img_size=img_size,
-        timestamp=timestamp,
-    )
     save_summary(
         history=history,
         activation=activation,
@@ -642,7 +619,7 @@ def main(
         edema_labels=edema_labels,
     )
 
-    print(f"\nSaved model, history, plots, evaluation metrics, summaries, and config for {activation}.")
+    print(f"\nSaved model, history, plots, summaries, and config for {activation}.")
     print(f"Run timestamp: {timestamp}")
 
 
