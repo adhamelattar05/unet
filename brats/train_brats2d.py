@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import tensorflow as tf
 from tensorflow.keras import layers, models
 from scipy.spatial.distance import directed_hausdorff
+from scipy.ndimage import distance_transform_edt
 
 MODEL_BASE = "/content/drive/MyDrive/Bachelor/Models/unet_edema"
 RESULTS_BASE = "/content/drive/MyDrive/Bachelor/Results/unet_edema"
@@ -121,12 +122,6 @@ def dice_loss(y_true, y_pred, eps=1e-6):
     return 1.0 - soft_dice_coef(y_true, y_pred, eps=eps)
 
 
-def bce_dice_loss(y_true, y_pred):
-    bce = tf.reduce_mean(tf.keras.losses.binary_crossentropy(y_true, y_pred))
-    dloss = dice_loss(y_true, y_pred)
-    return bce + dloss
-
-
 def precision_metric(y_true, y_pred, eps=1e-6):
     y_true = tf.cast(y_true, tf.float32)
     y_pred = tf.cast(y_pred > 0.5, tf.float32)
@@ -155,6 +150,63 @@ def iou_metric(y_true, y_pred, eps=1e-6):
     union = tf.reduce_sum(y_true) + tf.reduce_sum(y_pred) - inter
 
     return (inter + eps) / (union + eps)
+
+
+def _signed_distance_map_single(mask_2d):
+    mask_2d = (mask_2d > 0.5).astype(np.uint8)
+
+    if mask_2d.max() == 0:
+        return np.ones_like(mask_2d, dtype=np.float32)
+
+    if mask_2d.min() == 1:
+        return np.ones_like(mask_2d, dtype=np.float32)
+
+    fg_dist = distance_transform_edt(mask_2d)
+    bg_dist = distance_transform_edt(1 - mask_2d)
+
+    # Distance to boundary from both sides
+    sdm = fg_dist + bg_dist
+    return sdm.astype(np.float32)
+
+
+def _batch_distance_maps(y_true_np):
+    y_true_np = np.asarray(y_true_np).astype(np.float32)
+    batch = []
+
+    for i in range(y_true_np.shape[0]):
+        mask = np.squeeze(y_true_np[i])
+        sdm = _signed_distance_map_single(mask)
+        batch.append(np.expand_dims(sdm, axis=-1))
+
+    return np.stack(batch, axis=0).astype(np.float32)
+
+
+def hausdorff_loss(y_true, y_pred):
+    """
+    Differentiable Hausdorff-style surrogate.
+    This is not exact Hausdorff distance.
+    It weights squared prediction errors by distance to the GT boundary.
+    """
+    y_true = tf.cast(y_true, tf.float32)
+    y_pred = tf.cast(y_pred, tf.float32)
+
+    dist_map = tf.numpy_function(
+        func=_batch_distance_maps,
+        inp=[y_true],
+        Tout=tf.float32,
+    )
+    dist_map.set_shape(y_true.shape)
+
+    sq_error = tf.square(y_true - y_pred)
+    weighted_error = sq_error * tf.square(dist_map)
+
+    return tf.reduce_mean(weighted_error)
+
+
+def hausdorff_dice_loss(y_true, y_pred, hausdorff_weight=1.0, dice_weight=1.0):
+    hd = hausdorff_loss(y_true, y_pred)
+    dl = dice_loss(y_true, y_pred)
+    return hausdorff_weight * hd + dice_weight * dl
 
 
 def clean_mask_to_edema(mask, edema_labels=1):
@@ -659,7 +711,7 @@ def main(
     set_low_power()
     ensure_dirs()
 
-    loss_name = "bce_dice_loss"
+    loss_name = "hausdorff_dice_loss"
     edema_labels = parse_edema_labels(edema_labels)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -680,7 +732,7 @@ def main(
     model = build_unet(img_size=img_size, activation=activation)
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
-        loss=bce_dice_loss,
+        loss=hausdorff_dice_loss,
         metrics=[
             dice_coef,
             precision_metric,
