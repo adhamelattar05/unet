@@ -107,6 +107,26 @@ def dice_coef(y_true, y_pred, eps=1e-6):
     return (2.0 * inter + eps) / (denom + eps)
 
 
+def soft_dice_coef(y_true, y_pred, eps=1e-6):
+    y_true = tf.cast(y_true, tf.float32)
+    y_pred = tf.cast(y_pred, tf.float32)
+
+    inter = tf.reduce_sum(y_true * y_pred)
+    denom = tf.reduce_sum(y_true) + tf.reduce_sum(y_pred)
+
+    return (2.0 * inter + eps) / (denom + eps)
+
+
+def dice_loss(y_true, y_pred, eps=1e-6):
+    return 1.0 - soft_dice_coef(y_true, y_pred, eps=eps)
+
+
+def bce_dice_loss(y_true, y_pred):
+    bce = tf.reduce_mean(tf.keras.losses.binary_crossentropy(y_true, y_pred))
+    dloss = dice_loss(y_true, y_pred)
+    return bce + dloss
+
+
 def precision_metric(y_true, y_pred, eps=1e-6):
     y_true = tf.cast(y_true, tf.float32)
     y_pred = tf.cast(y_pred > 0.5, tf.float32)
@@ -370,12 +390,8 @@ def make_error_map(gt_mask, pred_mask):
     tp = ((pr == 1) & (gt == 1)).astype(np.float32)
 
     err = np.zeros((gt.shape[0], gt.shape[1], 3), dtype=np.float32)
-
-    # True positive -> green
     err[..., 1] += tp
-    # False positive -> red
     err[..., 0] += fp
-    # False negative -> blue
     err[..., 2] += fn
 
     return np.clip(err, 0, 1)
@@ -501,6 +517,7 @@ def save_summary(
     timestamp,
     edema_labels,
     eval_summary,
+    loss_name,
 ):
     cumulative_summary_path = (
         f"{RESULTS_BASE}/metrics/summary_unet_edema_experiments.csv"
@@ -522,6 +539,7 @@ def save_summary(
         "timestamp": timestamp,
         "activation": activation,
         "img_size": img_size,
+        "loss_name": loss_name,
         "edema_labels_kept": edema_labels_str,
         "epochs_requested": epochs,
         "epochs_ran": len(history.history["loss"]),
@@ -581,7 +599,16 @@ def save_summary(
     df_latest.to_csv(latest_summary_path, index=False)
 
 
-def save_config(data_dir, img_size, activation, epochs, batch_size, timestamp, edema_labels):
+def save_config(
+    data_dir,
+    img_size,
+    activation,
+    epochs,
+    batch_size,
+    timestamp,
+    edema_labels,
+    loss_name,
+):
     config = {
         "timestamp": timestamp,
         "data_dir": data_dir,
@@ -589,6 +616,7 @@ def save_config(data_dir, img_size, activation, epochs, batch_size, timestamp, e
         "activation": activation,
         "epochs": epochs,
         "batch_size": batch_size,
+        "loss_name": loss_name,
         "edema_labels_kept": edema_labels if isinstance(edema_labels, list) else [edema_labels],
         "model_dir": MODEL_BASE,
         "results_dir": RESULTS_BASE,
@@ -631,6 +659,7 @@ def main(
     set_low_power()
     ensure_dirs()
 
+    loss_name = "bce_dice_loss"
     edema_labels = parse_edema_labels(edema_labels)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -646,11 +675,12 @@ def main(
     print("\nLoaded:")
     print("Train:", Xtr.shape, Ytr.shape)
     print("Val  :", Xva.shape, Yva.shape)
+    print("Loss :", loss_name)
 
     model = build_unet(img_size=img_size, activation=activation)
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
-        loss="binary_crossentropy",
+        loss=bce_dice_loss,
         metrics=[
             dice_coef,
             precision_metric,
@@ -723,6 +753,7 @@ def main(
         timestamp=timestamp,
         edema_labels=edema_labels,
         eval_summary=eval_summary,
+        loss_name=loss_name,
     )
     save_config(
         data_dir=data_dir,
@@ -732,6 +763,7 @@ def main(
         batch_size=batch_size,
         timestamp=timestamp,
         edema_labels=edema_labels,
+        loss_name=loss_name,
     )
 
     print(f"\nSaved model, history, plots, summaries, config, and prediction visualizations for {activation}.")
