@@ -200,10 +200,23 @@ def hausdorff_eroded_loss(y_true, y_pred, iterations=10, alpha=2.0):
     return total
 
 
-def hausdorff_dice_loss(y_true, y_pred, hausdorff_weight=1.0, dice_weight=1.0):
-    hd = hausdorff_eroded_loss(y_true, y_pred, iterations=10, alpha=2.0)
-    dl = dice_loss(y_true, y_pred)
-    return hausdorff_weight * hd + dice_weight * dl
+def build_hausdorff_dice_loss(
+    hausdorff_weight=1.0,
+    dice_weight=1.0,
+    hausdorff_iterations=10,
+    hausdorff_alpha=2.0,
+):
+    def loss_fn(y_true, y_pred):
+        hd = hausdorff_eroded_loss(
+            y_true,
+            y_pred,
+            iterations=hausdorff_iterations,
+            alpha=hausdorff_alpha,
+        )
+        dl = dice_loss(y_true, y_pred)
+        return hausdorff_weight * hd + dice_weight * dl
+
+    return loss_fn
 
 
 def clean_mask_to_edema(mask, edema_labels=1):
@@ -567,6 +580,11 @@ def save_summary(
     edema_labels,
     eval_summary,
     loss_name,
+    hausdorff_weight,
+    dice_weight,
+    eval_threshold,
+    learning_rate,
+    patience,
 ):
     cumulative_summary_path = (
         f"{RESULTS_BASE}/metrics/summary_unet_edema_experiments.csv"
@@ -589,6 +607,11 @@ def save_summary(
         "activation": activation,
         "img_size": img_size,
         "loss_name": loss_name,
+        "hausdorff_weight": hausdorff_weight,
+        "dice_weight": dice_weight,
+        "eval_threshold": eval_threshold,
+        "learning_rate": learning_rate,
+        "patience": patience,
         "edema_labels_kept": edema_labels_str,
         "epochs_requested": epochs,
         "epochs_ran": len(history.history["loss"]),
@@ -657,6 +680,11 @@ def save_config(
     timestamp,
     edema_labels,
     loss_name,
+    hausdorff_weight,
+    dice_weight,
+    eval_threshold,
+    learning_rate,
+    patience,
 ):
     config = {
         "timestamp": timestamp,
@@ -666,6 +694,11 @@ def save_config(
         "epochs": epochs,
         "batch_size": batch_size,
         "loss_name": loss_name,
+        "hausdorff_weight": hausdorff_weight,
+        "dice_weight": dice_weight,
+        "eval_threshold": eval_threshold,
+        "learning_rate": learning_rate,
+        "patience": patience,
         "edema_labels_kept": edema_labels if isinstance(edema_labels, list) else [edema_labels],
         "model_dir": MODEL_BASE,
         "results_dir": RESULTS_BASE,
@@ -704,6 +737,11 @@ def main(
     epochs=5,
     batch_size=1,
     edema_labels=1,
+    hausdorff_weight=1.0,
+    dice_weight=1.0,
+    eval_threshold=0.5,
+    learning_rate=1e-4,
+    patience=5,
 ):
     set_low_power()
     ensure_dirs()
@@ -725,11 +763,23 @@ def main(
     print("Train:", Xtr.shape, Ytr.shape)
     print("Val  :", Xva.shape, Yva.shape)
     print("Loss :", loss_name)
+    print("hausdorff_weight:", hausdorff_weight)
+    print("dice_weight:", dice_weight)
+    print("eval_threshold:", eval_threshold)
+    print("learning_rate:", learning_rate)
+    print("patience:", patience)
+
+    loss_fn = build_hausdorff_dice_loss(
+        hausdorff_weight=hausdorff_weight,
+        dice_weight=dice_weight,
+        hausdorff_iterations=10,
+        hausdorff_alpha=2.0,
+    )
 
     model = build_unet(img_size=img_size, activation=activation)
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
-        loss=hausdorff_dice_loss,
+        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
+        loss=loss_fn,
         metrics=[
             dice_coef,
             precision_metric,
@@ -749,7 +799,7 @@ def main(
     es = tf.keras.callbacks.EarlyStopping(
         monitor="val_dice_coef",
         mode="max",
-        patience=5,
+        patience=patience,
         restore_best_weights=True,
     )
 
@@ -772,7 +822,7 @@ def main(
     eval_summary = evaluate_predictions(
         y_true=Yva,
         y_prob=y_val_prob,
-        threshold=0.5,
+        threshold=eval_threshold,
     )
 
     print("\nValidation evaluation summary:")
@@ -786,7 +836,7 @@ def main(
         activation=activation,
         img_size=img_size,
         timestamp=timestamp,
-        threshold=0.5,
+        threshold=eval_threshold,
         max_samples=12,
     )
 
@@ -803,6 +853,11 @@ def main(
         edema_labels=edema_labels,
         eval_summary=eval_summary,
         loss_name=loss_name,
+        hausdorff_weight=hausdorff_weight,
+        dice_weight=dice_weight,
+        eval_threshold=eval_threshold,
+        learning_rate=learning_rate,
+        patience=patience,
     )
     save_config(
         data_dir=data_dir,
@@ -813,6 +868,11 @@ def main(
         timestamp=timestamp,
         edema_labels=edema_labels,
         loss_name=loss_name,
+        hausdorff_weight=hausdorff_weight,
+        dice_weight=dice_weight,
+        eval_threshold=eval_threshold,
+        learning_rate=learning_rate,
+        patience=patience,
     )
 
     print(f"\nSaved model, history, plots, summaries, config, and prediction visualizations for {activation}.")
@@ -829,6 +889,12 @@ if __name__ == "__main__":
     ap.add_argument("--epochs", type=int, default=5)
     ap.add_argument("--batch_size", type=int, default=1)
     ap.add_argument("--edema_labels", default="1")
+
+    ap.add_argument("--hausdorff_weight", type=float, default=1.0)
+    ap.add_argument("--dice_weight", type=float, default=1.0)
+    ap.add_argument("--eval_threshold", type=float, default=0.5)
+    ap.add_argument("--learning_rate", type=float, default=1e-4)
+    ap.add_argument("--patience", type=int, default=5)
 
     args = ap.parse_args()
     main(**vars(args))
