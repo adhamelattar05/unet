@@ -466,7 +466,7 @@ def evaluate_predictions(y_true, y_prob, threshold=0.5):
 
 def save_per_sample_metrics(df, activation, img_size, timestamp):
     out_path = (
-        f"{RESULTS_BASE}/metrics/"
+        f"{RESULTS_BASE}/metrics/per_sample/"
         f"per_sample_metrics_unet_edema_{activation}_{img_size}_{timestamp}.csv"
     )
     df.to_csv(out_path, index=False)
